@@ -16,5 +16,5 @@ Execute the training script with the following command:
 ```bash
 bash thinkanywhere_scripts/train/run.sh
 ```
-**Note:** Make sure to modify all file path in the script with your specific paths and configurations.
+**Note:** Make sure to modify all file paths in the script with your specific paths and configurations.
 
