@@ -2,26 +2,26 @@
 ray stop
 export RAY_memory_usage_threshold=0.98
 export RAY_memory_monitor_refresh_ms=0
-export WANDB_DIR=/nfs100/zhangtianyu/wandb_logs
-ray start --head --port=6379 --dashboard-port=8265 --temp-dir=/nfs100/zhangtianyu/ray_tmp
+export WANDB_DIR=path_to_wandb_logs
+ray start --head --port=6379 --dashboard-port=8265 --temp-dir=path_to_ray_temp_dir
 
 set -ex
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-STATS_DIR="/nfs100/zhangtianyu/verl_ckpt/stats_${TIMESTAMP}"
+STATS_DIR="path_to_verl_ckpt_dir/stats_${TIMESTAMP}"
 mkdir -p $STATS_DIR
 
 # export RAY_DEBUG=1
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
-    data.train_files=/nfs100/zhangtianyu/or1_data/train/train_7b_code.pkl \
-    data.val_files=/nfs100/zhangtianyu/or1_data/eval/test_set_1221.parquet \
+    data.train_files=path_to_train_data/train_7b_code.pkl \
+    data.val_files=path_to_val_data/test_set_1221.parquet \
     data.train_batch_size=128 \
     data.val_batch_size=64 \
     data.max_prompt_length=1024 \
     data.max_response_length=4096 \
-    actor_rollout_ref.model.path=/nfs100/zhangtianyu/model/Qwen2.5-Coder-7B-Instruct-merged-v1 \
+    actor_rollout_ref.model.path=path_to_pretrained_model_dir \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
@@ -61,8 +61,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.test_freq=10 \
     trainer.stats_path=$STATS_DIR \
     trainer.stats_save_freq=10 \
-    trainer.default_local_dir=/nfs100/zhangtianyu/verl_ckpt/grpo_qwen_skywork_${TIMESTAMP} \
+    trainer.default_local_dir=path_to_verl_ckpt_dir/grpo_qwen_skywork_${TIMESTAMP} \
     trainer.resume_mode=disable \
     trainer.default_hdfs_dir=null \
     trainer.total_epochs=3 "${@:1}"
-    
