@@ -1,0 +1,46 @@
+data:
+  train_batch_size: 64
+  micro_batch_size: null # will be deprecated, use micro_batch_size_per_gpu
+  micro_batch_size_per_gpu: 2  # this is also val batch size
+  train_files: sft_data/flash_train_sft_code.parquet
+  val_files: sft_data/flash_train_sft_code.parquet
+  prompt_key: prompt
+  response_key: response
+  max_length: 8192
+  truncation: right
+  balance_dp_token: False
+  chat_template: null
+model:
+  partial_pretrain: /mnt/hdfs/data/ThinkAnywhere/Qwen2.5-Coder-7B-Instruct-TwoStageLora-stage1/global_step_104
+  fsdp_config:
+    wrap_policy:
+      min_num_params: 0
+    cpu_offload: False
+    offload_params: False
+  external_lib: null
+  enable_gradient_checkpointing: True
+  trust_remote_code: True
+  lora_rank: 64  # Set to positive value to enable LoRA (e.g., 32)
+  lora_alpha: 128  # LoRA scaling factor
+  target_modules: all-linear  # Target modules for LoRA adaptation
+  use_liger: False
+  modules_to_save: ["embed_tokens", "lm_head"]
+optim:
+  lr: 1e-4
+  betas: [0.9, 0.95]
+  weight_decay: 0.01
+  warmup_steps_ratio: 0.05
+  clip_grad: 1.0
+ulysses_sequence_parallel_size: 1
+use_remove_padding: False
+trainer:
+  default_local_dir: /mnt/hdfs/data/ThinkAnywhere/Qwen2.5-Coder-7B-Instruct-TwoStageLora-stage2/
+  default_hdfs_dir: hdfs://tmp/experiments/code_sft # change the hdfs path here
+  resume_path: null
+  project_name: qwen-code-sft
+  experiment_name: TwoStageLora-stage2
+  total_epochs: 5
+  total_training_steps: null
+  logger: ['console','wandb']
+  seed: 1
+  save_freq: 104

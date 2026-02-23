@@ -51,6 +51,7 @@ from peft import LoraConfig, TaskType, get_peft_model
 from verl.workers.sharding_manager import FSDPUlyssesShardingManager
 from verl.utils.ulysses import ulysses_pad_and_slice_inputs, gather_outpus_and_unpad
 from verl import DataProto
+from functools import partial
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv('VERL_SFT_LOGGING_LEVEL', 'WARN'))
@@ -204,14 +205,68 @@ class FSDPSFTTrainer(object):
             apply_monkey_patch(config, verbose=True)
 
         # This may be very large
-        init_context = get_init_weight_context_manager(use_meta_tensor=not config.tie_word_embeddings)
+        init_context = get_init_weight_context_manager(use_meta_tensor=False)
+
+        def apply_sparse_embedding_hook(model, tokenizer, rank0_print_func=None):
+            """
+            通用函数：为模型的 Embedding 层注入稀疏梯度 Hook，
+            确保只有 <thinkanywhere> 和 </thinkanywhere> 对应的行会更新。
+            """
+            target_tokens = ["<thinkanywhere>", "</thinkanywhere>"]
+            new_token_ids = []
+
+            # 1. 获取 ID
+            for token in target_tokens:
+                token_id = tokenizer.convert_tokens_to_ids(token)
+                if token_id != tokenizer.unk_token_id:
+                    new_token_ids.append(token_id)
+
+            if not new_token_ids:
+                # 如果没找到，说明可能不需要练 embedding，或者 tokenizer 没对齐
+                if rank0_print_func:
+                    rank0_print_func(f"⚠️ 警告: 未在词表中找到 {target_tokens}，将跳过 Embedding 的 Sparse Hook 注入。")
+                return
+
+            if rank0_print_func:
+                rank0_print_func(f"🎯 [Sparse Hook] 锁定目标 Token: {target_tokens} -> IDs: {new_token_ids}")
+
+            # 2. 定义 Hook 函数
+            def sparse_grad_hook(grad, ids):
+                """反向传播时，只保留指定 ids 行的梯度，其他置零"""
+                # clone() 或 zeros_like 都可以，确保 device 一致
+                mask = torch.zeros_like(grad)
+                mask[ids] = 1.0
+                return grad * mask
+
+            # 3. 注入 Hook 到 Input/Output 层
+            # 注意：PEFT 的 modules_to_save 已经把 requires_grad 设为 True 了，
+            # 或者 Stage 1 手动设为 True 了，这里只需要负责 register_hook。
+
+            # 尝试获取输入输出层
+            # 兼容性处理：如果是 PEFT 模型，get_input_embeddings 可能返回的是 Base Model 的层
+            layers_to_hook = [
+                ("Input Embed", model.get_input_embeddings()), 
+                ("LM Head", model.get_output_embeddings())
+            ]
+
+            hook_count = 0
+            for name, layer in layers_to_hook:
+                if layer is not None and layer.weight.requires_grad:
+                    # 关键：只有当层是可训练的时候，注入 Hook 才有意义
+                    layer.weight.register_hook(partial(sparse_grad_hook, ids=new_token_ids))
+                    hook_count += 1
+                    if rank0_print_func:
+                        rank0_print_func(f"✅ 已为 {name} 注入稀疏梯度 Hook")
+
+            if hook_count == 0 and rank0_print_func:
+                rank0_print_func("⚠️ 警告: 找到了目标 Token，但没有检测到可训练的 Embedding 层 (requires_grad=False)。")
 
         with init_context():
             self.model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(local_model_path,
                                                                                config=config,
                                                                                torch_dtype=torch.float32,
                                                                                attn_implementation='flash_attention_2',
-                                                                               trust_remote_code=trust_remote_code)
+                                                                       trust_remote_code=trust_remote_code)
 
             # Apply Liger kernel if use_liger is enabled
             if self.config.model.get('use_liger', False):
@@ -228,8 +283,43 @@ class FSDPSFTTrainer(object):
                     'target_modules': convert_to_regular_types(self.config.model.target_modules),
                     'bias': "none"
                 }
+                if self.config.model.get('modules_to_save', None):
+                    lora_config['modules_to_save'] = convert_to_regular_types(self.config.model.modules_to_save)
                 self.model = get_peft_model(self.model, LoraConfig(**lora_config))
 
+                if self.config.model.get('modules_to_save', None):
+                    if self.device_mesh.get_rank() == 0:
+                        print("🚀 检测到 Stage 2 混合模式：LoRA + 新 Token Embedding 训练")
+
+                    # 调用复用的 Hook 逻辑
+                    apply_sparse_embedding_hook(
+                        model=self.model, 
+                        tokenizer=self.tokenizer, 
+                        rank0_print_func=print if self.device_mesh.get_rank() == 0 else None
+                    )
+
+            # 只要在 yaml 里设置 lora_rank: 0 且指定了 modules_to_save，就进入这个模式
+            elif self.config.model.get('modules_to_save', None):
+                if self.device_mesh.get_rank() == 0:
+                    print("🚀 检测到 Stage 1 精准训练模式：仅针对新 Token 更新 Embedding！")
+                
+                self.model.requires_grad_(False)
+
+                for layer in [self.model.get_input_embeddings(), self.model.get_output_embeddings()]:
+                    if layer is not None:
+                        layer.weight.requires_grad = True
+
+                apply_sparse_embedding_hook(
+                    model=self.model, 
+                    tokenizer=self.tokenizer, 
+                    rank0_print_func=print if self.device_mesh.get_rank() == 0 else None
+                )
+
+            # 打印参数统计
+            if self.device_mesh.get_rank() == 0:
+                trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+                print(f"📊 最终确认可训练参数量: {trainable_params}")
+                
         if self.config.model.enable_gradient_checkpointing:
             self.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})
 
@@ -259,7 +349,7 @@ class FSDPSFTTrainer(object):
                                sync_module_states=True,
                                device_id=torch.cuda.current_device(),
                                cpu_offload=cpu_offload,
-                               use_orig_params=False)
+                               use_orig_params=True)
 
         log_gpu_memory_usage('After FSDP wrapping', logger=logger)
 
@@ -424,22 +514,68 @@ class FSDPSFTTrainer(object):
         return loss
 
     def save_checkpoint(self, step):
-        # save checkpoint
+        rank = self.device_mesh.get_rank()
+
+        local_root = "/dev/shm/qwen_stage2_save_final"
+        save_path = os.path.join(local_root, f'global_step_{step}')
+
+        # 2. FSDP Gather
         from torch.distributed.fsdp import FullStateDictConfig, StateDictType
         cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+
+        if rank == 0: print(f"Rank 0: 正在执行 FSDP state_dict gather...")
         with FSDP.state_dict_type(self.fsdp_model, StateDictType.FULL_STATE_DICT, cfg):
             state_dict = self.fsdp_model.state_dict()
 
-        path = os.path.join(self.config.trainer.default_local_dir, f'global_step_{step}')
-        # save huggingface model
-        if self.device_mesh.get_rank() == 0:
-            os.makedirs(path, exist_ok=True)
-            self.model.save_pretrained(path, state_dict=state_dict)
-            self.tokenizer.save_pretrained(path)
-            if self.config.trainer.default_hdfs_dir:
-                hdfs_io.makedirs(self.config.trainer.default_hdfs_dir, exist_ok=True)
-                hdfs_io.copy(src=path, dst=self.config.trainer.default_hdfs_dir, dirs_exist_ok=True)
+        # 3. Rank 0 独占逻辑
+        if rank == 0:
+            print(f"Rank 0: Gather 完成，开始过滤...")
+
+            # --- 过滤逻辑 ---
+            keys_to_save = {}
+            for k, v in state_dict.items():
+                if "lora_" in k or "embed_tokens" in k or "lm_head" in k:
+                    # 深拷贝到 CPU，切断显存联系
+                    keys_to_save[k] = v.clone().detach().cpu()
+
+            del state_dict
+            import gc
+            gc.collect()
+            print(f"Rank 0: 内存回收完成，准备写入内存盘 {save_path} ...")
+
+            os.makedirs(save_path, exist_ok=True)
+
+            # === 手动保存 ===
+            weight_path = os.path.join(save_path, "adapter_model.bin")
+            torch.save(keys_to_save, weight_path)
+            print(f"Rank 0: ✅ 权重已写入 /dev/shm (adapter_model.bin)")
+
+            # 保存 Config
+            if hasattr(self.model, "peft_config"):
+                adapter_config = self.model.peft_config['default']
+                adapter_config.save_pretrained(save_path)
+
+            # 保存 Tokenizer
+            self.tokenizer.save_pretrained(save_path)
+
+            print(f"Rank 0: 🎉 保存流程结束！")
+
+            try:
+                # 使用 yaml 里配置的路径
+                target_hdfs_dir = os.path.join(self.config.trainer.default_local_dir, f'global_step_{step}')
+                print(f"Rank 0: 正在搬运到 HDFS: {target_hdfs_dir} ...")
+                import shutil
+                if os.path.exists(target_hdfs_dir):
+                    shutil.rmtree(target_hdfs_dir)
+                shutil.copytree(save_path, target_hdfs_dir)
+                print(f"Rank 0: ✅ HDFS 搬运完成")
+            except Exception as e:
+                print(f"Rank 0: ⚠️ 搬运失败: {e}")
+
+        # 4. 同步
+        print(f"Rank {rank}: 等待 Barrier...")
         torch.distributed.barrier()
+        print(f"Rank {rank}: Barrier 通过！")
 
     def fit(self):
         rank = self.device_mesh.get_rank()
@@ -463,6 +599,8 @@ class FSDPSFTTrainer(object):
 
         # TODO (zhangchi.usc1992) add back checkpoint manager. Currently, it blocks when uploading to hdfs. So very slow.
 
+        save_freq = self.config.trainer.get('save_freq', 0)
+
         for epoch in range(self.config.trainer.total_epochs):
             self.train_sampler.set_epoch(epoch=epoch)
             for data in tqdm(self.train_dataloader,
@@ -473,6 +611,9 @@ class FSDPSFTTrainer(object):
                 if rank == 0:
                     tracking.log(data=metric, step=global_step)
                 global_step += 1
+
+                if save_freq > 0 and global_step % save_freq == 0:
+                    self.save_checkpoint(step=global_step)
 
                 # for early exit validation
                 if global_step >= self.total_training_steps:

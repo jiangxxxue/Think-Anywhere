@@ -192,7 +192,7 @@ class ActorRolloutRefWorker(Worker):
             print(f'Model config after override: {actor_model_config}')
 
         # NOTE(fix me): tie_word_embedding causes meta_tensor init to hang
-        init_context = get_init_weight_context_manager(use_meta_tensor=not actor_model_config.tie_word_embeddings)
+        init_context = get_init_weight_context_manager(use_meta_tensor=False)
 
         with init_context(), warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -917,7 +917,7 @@ class RewardModelWorker(Worker):
             apply_monkey_patch(model_config, verbose=True)
 
         # note that we have to create model in fp32. Otherwise, the optimizer is in bf16, which is incorrect
-        init_context = get_init_weight_context_manager(use_meta_tensor=not model_config.tie_word_embeddings)
+        init_context = get_init_weight_context_manager(use_meta_tensor=False)
 
         with init_context(), warnings.catch_warnings():
             warnings.simplefilter("ignore")
