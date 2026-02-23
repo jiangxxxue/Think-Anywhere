@@ -20,7 +20,7 @@ Use the configuration file `verl/trainer/config/qwen_code_sft_stage1.yaml` and r
 ```bash
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 torchrun --nproc_per_node=8 -m verl.trainer.fsdp_sft_trainer \
-  --config-path verl/trainer/config \
+  --config-path config \
   --config-name qwen_code_sft_stage1.yaml
 ```
 
@@ -30,7 +30,7 @@ After completing Stage 1, proceed to Stage 2 with the configuration file `verl/t
 ```bash
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 torchrun --nproc_per_node=8 -m verl.trainer.fsdp_sft_trainer \
-  --config-path verl/trainer/config \
+  --config-path config \
   --config-name qwen_code_sft_stage2.yaml
 ```
 ### 3. Reinforcement Learning (RL) Training

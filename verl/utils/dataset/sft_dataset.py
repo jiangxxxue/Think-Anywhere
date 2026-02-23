@@ -84,18 +84,27 @@ class SFTDataset(Dataset):
             dataframe = pd.read_parquet(parquet_file)
             dataframes.append(dataframe)
         self.dataframe = pd.concat(dataframes)
+
+        # ----- prompts -----
         self.prompts = self.dataframe[self.prompt_key]
+        # 如果是单列 DataFrame，转成 Series
+        if isinstance(self.prompts, pd.DataFrame) and len(self.prompt_key) == 1:
+            self.prompts = self.prompts[self.prompt_key[0]]
+
         for key in self.prompt_dict_keys:
-            # type(x): pandas.core.series.Series
-            # type(x[0]): numpy.ndarray
-            # type(x[0][0]): dict
             try:
                 self.prompts = self.prompts.apply(lambda x: series_to_item(x)[key], axis=1)
             except Exception:
                 print(f'self.prompts={self.prompts}')
                 raise
         self.prompts = self.prompts.tolist()
+
+        # ----- responses -----
         self.responses = self.dataframe[self.response_key]
+        # 如果是单列 DataFrame，转成 Series
+        if isinstance(self.responses, pd.DataFrame) and len(self.response_key) == 1:
+            self.responses = self.responses[self.response_key[0]]
+
         for key in self.response_dict_keys:
             try:
                 self.responses = self.responses.apply(lambda x: series_to_item(x)[key], axis=1)
