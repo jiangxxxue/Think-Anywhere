@@ -71,6 +71,7 @@ def remove_think_blocks(text: str):
 
     return cleaned_text, think_count, thinkanywhere_count
 
+
 def cal_format_reward(text: str) -> float:
     format_reward = 0.0 
 
@@ -198,9 +199,24 @@ def math_verify_reward_function(solution_str, ground_truth):
 def compute_score(completion, test_cases, task=None, timeout=6, is_long_penalty=False, is_binary_reward=True, is_power4_reward=False):
     # try to get code solution from completion. if the completion is pure code, this will not take effect.
     # solution = completion.split('```python')[-1].split('```')[0]
+    # ==================== 新增日志记录逻辑 ====================
+    # try:
+    #     # 定义日志文件路径
+    #     log_file_path = "/opt/tiger/ThinkAnywhere/debug_completion.log"
+        
+    #     # 获取当前时间
+    #     current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        
+    #     with open(log_file_path, "a", encoding="utf-8") as f:
+    #         f.write(f"\n{'='*20} TIME: {current_time} {'='*20}\n")
+    #         f.write(f"[Completion Content]:\n{completion}\n")
+    #         f.write(f"{'='*60}\n")
+    # except Exception as e:
+    #     print(f"Error writing to debug log: {e}")
+    # ========================================================
     format_reward = cal_format_reward(completion)
-    if format_reward == 0.0:
-        return 0.0, "format not match expectation."
+    # if format_reward == 0.0:
+    #     return 0.0, "format not match expectation."
     
     solution_str, think_count, thinkanywhere_count = remove_think_blocks(completion)
 
@@ -412,4 +428,3 @@ def compute_score(completion, test_cases, task=None, timeout=6, is_long_penalty=
         except:
             traceback.print_exc(10)
             return False, None
-

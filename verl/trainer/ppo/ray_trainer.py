@@ -642,6 +642,16 @@ class RayPPOTrainer(object):
         reward_models = []
         extra_info = []
 
+        whitelist = {'<thinkanywhere>', '</thinkanywhere>'}
+        all_specials = set(self.tokenizer.all_special_tokens)
+        tokens_to_remove = all_specials - whitelist
+
+        def decode_and_clean(ids):
+            text = self.tokenizer.decode(ids, skip_special_tokens=False)
+            for t in tokens_to_remove:
+                text = text.replace(t, '')
+            return text
+
         for test_data in self.val_dataloader:
             test_batch = DataProto.from_single_dict(test_data)
             n_val_samples = self.config.actor_rollout_ref.rollout.n_val
@@ -653,7 +663,7 @@ class RayPPOTrainer(object):
 
             # Store original inputs
             input_ids = test_batch.batch['input_ids']
-            input_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in input_ids]
+            input_texts = [decode_and_clean(ids) for ids in input_ids]
             sample_inputs.extend(input_texts)
             abilities.extend(test_batch.non_tensor_batch['ability'].tolist())
             _reward_models = []
@@ -682,7 +692,7 @@ class RayPPOTrainer(object):
 
             # Store generated outputs
             output_ids = test_output_gen_batch.batch['responses']
-            output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
+            output_texts = [decode_and_clean(ids) for ids in output_ids]
             sample_outputs.extend(output_texts)
 
             test_batch = test_batch.union(test_output_gen_batch)
@@ -944,6 +954,16 @@ class RayPPOTrainer(object):
 
         self.global_steps = 0
 
+        whitelist = {'<thinkanywhere>', '</thinkanywhere>'}
+        all_specials = set(self.tokenizer.all_special_tokens)
+        tokens_to_remove = all_specials - whitelist
+        
+        def decode_and_clean(ids):
+            text = self.tokenizer.decode(ids, skip_special_tokens=False)
+            for t in tokens_to_remove:
+                text = text.replace(t, '')
+            return text
+
         # load checkpoint before doing anything
         self._load_checkpoint()
 
@@ -1189,8 +1209,8 @@ class RayPPOTrainer(object):
                         f.write(json.dumps(metrics_to_save, ensure_ascii=False) + "\n")
 
                 # Gather prompts and responses (and other stats) from the current batch
-                prompts = self.tokenizer.batch_decode(batch.batch["input_ids"], skip_special_tokens=True)
-                responses = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
+                prompts = [decode_and_clean(ids) for ids in batch.batch["input_ids"]]
+                responses = [decode_and_clean(ids) for ids in batch.batch["responses"]]
                 prompt_lengths = [len(self.tokenizer.encode(prompt, add_special_tokens=False)) for prompt in prompts]
                 response_lengths = [len(self.tokenizer.encode(response, add_special_tokens=False)) for response in responses]
 
@@ -1227,14 +1247,21 @@ class RayPPOTrainer(object):
                     print(f"Saving stats to {save_stats_path} at step {current_global_steps}")
                     save_start_step = current_interval_start
                     save_end_step = current_global_steps
+
+                    success_data = [d for d in save_data if d['reward'] >= 1.0 - 1e-6] 
+                    other_data = [d for d in save_data if d['reward'] < 1.0 - 1e-6]
                     
                     ratio = 0.05
-                    total = len(save_data)
-                    k = max(1, math.ceil(total * ratio))  # 至少保存 1 条，防止为空
-                    sampled_data = random.sample(save_data, k)
+                    if len(other_data) > 0:
+                        k = max(1, math.ceil(len(other_data) * ratio))
+                        sampled_others = random.sample(other_data, k)
+                    else:
+                        sampled_others = []
+
+                    final_data_to_save = success_data + sampled_others
 
                     with open(os.path.join(save_stats_path, f"train_batch_stats_steps_{save_start_step}_to_{save_end_step}.jsonl"), "w") as f:
-                        for data in sampled_data:
+                        for data in final_data_to_save:
                             f.write(json.dumps(data, ensure_ascii=False) + "\n")
                     
                     # Reset the accumulator and update the interval start for the next save

@@ -46,18 +46,18 @@ if __name__ == '__main__':
     
     dataset= dataset.map(process_ground_truth)
     
-    def filter_fn(example):  
+    # def filter_fn(example):  
 
-        if 'extra_info' not in example or 'model_difficulty' not in example['extra_info']:
-            return False 
-        difficulty = example['extra_info']['model_difficulty'].get('DeepSeek-R1-Distill-Qwen-7B')
-        if difficulty is None:
-            return False
-        if difficulty < 1 or difficulty > 15:
-            return False
-        return True
-    dataset = dataset.filter(filter_fn)
-    print("\n\nFiltered dataset: ", "\n", dataset)
+    #     if 'extra_info' not in example or 'model_difficulty' not in example['extra_info']:
+    #         return False 
+    #     difficulty = example['extra_info']['model_difficulty'].get('DeepSeek-R1-Distill-Qwen-7B')
+    #     if difficulty is None:
+    #         return False
+    #     if difficulty < 1 or difficulty > 15:
+    #         return False
+    #     return True
+    # dataset = dataset.filter(filter_fn)
+    # print("\n\nFiltered dataset: ", "\n", dataset)
 
     data_list = []
     for key in dataset:

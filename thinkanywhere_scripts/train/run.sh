@@ -1,24 +1,19 @@
 #!/bin/bash
-ray stop
-export RAY_memory_usage_threshold=0.98
-export RAY_memory_monitor_refresh_ms=0
-export WANDB_DIR=path_to_wandb_logs
-ray start --head --port=6379 --dashboard-port=8265 --temp-dir=path_to_ray_temp_dir
-
 set -ex
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-STATS_DIR="path_to_verl_ckpt_dir/stats_${TIMESTAMP}"
-mkdir -p $STATS_DIR
 
-# export RAY_DEBUG=1
+STATS_DIR="path_to_verl_ckpt_dir/stats_${TIMESTAMP}"
+LOCAL_DIR="path_to_verl_ckpt_dir/thinkanywhere_ckpt_${TIMESTAMP}"
+
+mkdir -p "$STATS_DIR"
+mkdir -p "$LOCAL_DIR"
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     data.train_files=path_to_train_data/train_7b_code.pkl \
-    data.val_files=path_to_val_data/test_set_1221.parquet \
+    data.val_files=path_to_train_data/train_7b_code.pkl \
     data.train_batch_size=128 \
-    data.val_batch_size=64 \
     data.max_prompt_length=1024 \
     data.max_response_length=4096 \
     actor_rollout_ref.model.path=path_to_pretrained_model_dir \
@@ -38,30 +33,30 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.adaptive_entropy.min_ent_coef=0 \
     actor_rollout_ref.actor.adaptive_entropy.delta_ent_coef=0.0001 \
     actor_rollout_ref.ref.fsdp_config.param_offload=False \
-    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1 \
-    actor_rollout_ref.rollout.tensor_model_parallel_size=4 \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=16 \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.temperature=1.0 \
     actor_rollout_ref.rollout.val_temperature=0.0 \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.67 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
     actor_rollout_ref.rollout.n=8 \
-    actor_rollout_ref.rollout.n_val=8 \
-    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
+    actor_rollout_ref.rollout.n_val=0 \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=16 \
     reward_model.reward_manager=yr \
     trainer.critic_warmup=0 \
     trainer.rejection_sample=True \
     trainer.rejection_sample_multiplier=1 \
     trainer.logger=['console','wandb'] \
     trainer.project_name=code_reasoning_grpo_coder \
-    trainer.experiment_name=grpo_qwen_skywork_${TIMESTAMP} \
+    trainer.experiment_name=thinkanywhere_${TIMESTAMP} \
     trainer.val_before_train=False \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \
     trainer.save_freq=50 \
-    trainer.test_freq=10 \
-    trainer.stats_path=$STATS_DIR \
-    trainer.stats_save_freq=10 \
-    trainer.default_local_dir=path_to_verl_ckpt_dir/grpo_qwen_skywork_${TIMESTAMP} \
+    trainer.test_freq=999999 \
+    trainer.stats_path="$STATS_DIR" \
+    trainer.stats_save_freq=20 \
+    trainer.default_local_dir="$LOCAL_DIR" \
     trainer.resume_mode=disable \
     trainer.default_hdfs_dir=null \
     trainer.total_epochs=3 "${@:1}"
