@@ -6,7 +6,7 @@ import sys
 import time
 import psutil
 
-sys.set_int_max_str_digits(50000)
+# sys.set_int_max_str_digits(50000)
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import json

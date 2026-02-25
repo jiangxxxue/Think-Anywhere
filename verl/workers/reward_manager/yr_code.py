@@ -67,7 +67,32 @@ class YRRewardManager:
 
         response_ids = data.batch['responses']
         valid_response_length = data.batch['attention_mask'][:, prompt_length:].sum(dim=-1)
-        response_str = self.tokenizer.batch_decode(response_ids, skip_special_tokens=True)
+        raw_response_str = self.tokenizer.batch_decode(response_ids, skip_special_tokens=False)
+        whitelist = {"<thinkanywhere>", "</thinkanywhere>"}
+        all_special_tokens = set(self.tokenizer.all_special_tokens)
+        tokens_to_remove = all_special_tokens - whitelist
+        response_str = []
+        for text in raw_response_str:
+            for t in tokens_to_remove:
+                text = text.replace(t, "") # 删掉不需要的控制符
+            response_str.append(text)
+
+        # ==================== 新增日志记录逻辑 ====================
+        # try:
+        #     with open("/opt/tiger/ThinkAnywhere/reward_debug.log", "a", encoding="utf-8") as f:
+        #         header = f"\n{'='*20} PID:{os.getpid()} | TIME:{time.strftime('%H:%M:%S')} {'='*20}\n"
+        #         f.write(header)
+                
+                
+        #         f.write("-" * 20 + " After Cleaning " + "-" * 20 + "\n")
+        #         f.write(f"{response_str}\n")
+                
+        #         f.write("=" * 60 + "\n")
+        # except Exception as e:
+        #     print(f"Error writing to debug log: {e}")
+        # ========================================================
+
+        
         ground_truth = [(data_item.non_tensor_batch['reward_model']['ground_truth'] if 'livecodebench' not in data_item.non_tensor_batch['data_source'] else data_item.non_tensor_batch['extra_info']) for data_item in data]
         ground_truth = [x.tolist() if isinstance(x, np.ndarray) else x for x in ground_truth]
         data_sources = data.non_tensor_batch['data_source']
