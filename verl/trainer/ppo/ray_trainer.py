@@ -304,6 +304,13 @@ def compute_data_metrics(batch, use_critic=True):
         'prompt_length/clip_ratio':
             torch.mean(torch.eq(prompt_length, max_prompt_length).float()).detach().item(),
     }
+
+    if 'correctness_rewards' in batch.batch.keys():
+        metrics['critic/correctness/mean'] = torch.mean(batch.batch['correctness_rewards'].sum(-1)).detach().item()
+
+    if 'format_rewards' in batch.batch.keys():
+        metrics['critic/format_reward/mean'] = torch.mean(batch.batch['format_rewards'].sum(-1)).detach().item()
+
     return metrics
 
 
@@ -1036,6 +1043,16 @@ class RayPPOTrainer(object):
                         # we combine with rule-based rm
                         reward_tensor = self.reward_fn(batch)
                         batch.batch['token_level_scores'] = reward_tensor
+
+                        if 'correctness_rewards' in batch.batch.keys():
+                            correctness_rewards = batch.batch['correctness_rewards']
+                            seq_correctness = correctness_rewards.sum(-1)
+                            metrics['batch/correctness_rewards_before_reject'] = torch.mean(seq_correctness).detach().item()
+
+                        if 'format_rewards' in batch.batch.keys():
+                            format_rewards = batch.batch['format_rewards']
+                            seq_format_reward = format_rewards.sum(-1)
+                            metrics['batch/format_reward_before_reject'] = torch.mean(seq_format_reward).detach().item()
 
                         # adapt from deepscaler https://github.com/agentica-project/deepscaler/blob/main/verl/verl/trainer/ppo/ray_trainer.py#L627
                         if self.config.algorithm.adv_estimator == 'grpo':

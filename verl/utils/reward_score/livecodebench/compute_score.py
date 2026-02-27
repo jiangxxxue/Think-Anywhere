@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import time
 import json
 import re
 import traceback
@@ -48,28 +48,6 @@ inf = float('inf')
 livecodebench_dir = os.environ.get("LIVECODEBENCH_DATA_PATH", None)
 # if livecodebench_dir is None:
 #     raise ValueError("LIVECODEBENCH_DATA_PATH is not set")
-
-def remove_think_blocks(text: str):
-    """
-    Remove all <think>...</think> and <thinkanywhere>...</thinkanywhere> blocks,
-    return cleaned text and detailed removal counts.
-    """
-
-    think_pattern = r"<think>.*?</think>"
-    thinkanywhere_pattern = r"<thinkanywhere>.*?</thinkanywhere>"
-
-    think_count = len(re.findall(think_pattern, text, flags=re.DOTALL))
-    thinkanywhere_count = len(re.findall(thinkanywhere_pattern, text, flags=re.DOTALL))
-
-    cleaned = re.sub(think_pattern, "", text, flags=re.DOTALL)
-    cleaned = re.sub(thinkanywhere_pattern, "", cleaned, flags=re.DOTALL)
-
-    lines = cleaned.splitlines()
-    lines = [line for line in lines if line.strip() != ""]
-
-    cleaned_text = "\n".join(lines)
-
-    return cleaned_text, think_count, thinkanywhere_count
 
 
 def cal_format_reward(text: str) -> float:
@@ -194,54 +172,56 @@ def math_verify_reward_function(solution_str, ground_truth):
     # Very unlikely to be correct after the above matches
     return 0.0
 
-
-
 def compute_score(completion, test_cases, task=None, timeout=6, is_long_penalty=False, is_binary_reward=True, is_power4_reward=False):
+    format_reward = cal_format_reward(completion)
+    # format_reward = 0.0
+    res = compute_correctness_score(completion, test_cases, task, timeout, is_long_penalty, is_binary_reward, is_power4_reward)
+    
+    if res is None:
+        return format_reward, {"correctness": 0.0, "format_reward": format_reward, "metadata": None}
+        
+    score, metadata = res
+    
+    if isinstance(score, bool):
+        score = 1.0 if score else 0.0
+    elif score is None:
+        score = 0.0
+    
+    final_score = 0.9 * float(score) + float(format_reward)
+
+    # final_score = score
+
+    return final_score, {"correctness": score, "format_reward": format_reward, "metadata": metadata}
+
+
+
+def compute_correctness_score(completion, test_cases, task=None, timeout=6, is_long_penalty=False, is_binary_reward=True, is_power4_reward=False):
     # try to get code solution from completion. if the completion is pure code, this will not take effect.
     # solution = completion.split('```python')[-1].split('```')[0]
-    # ==================== 新增日志记录逻辑 ====================
-    # try:
-    #     # 定义日志文件路径
-    #     log_file_path = "/opt/tiger/ThinkAnywhere/debug_completion.log"
-        
-    #     # 获取当前时间
-    #     current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        
-    #     with open(log_file_path, "a", encoding="utf-8") as f:
-    #         f.write(f"\n{'='*20} TIME: {current_time} {'='*20}\n")
-    #         f.write(f"[Completion Content]:\n{completion}\n")
-    #         f.write(f"{'='*60}\n")
-    # except Exception as e:
-    #     print(f"Error writing to debug log: {e}")
-    # ========================================================
-    format_reward = cal_format_reward(completion)
-    # if format_reward == 0.0:
-    #     return 0.0, "format not match expectation."
-    
-    solution_str, think_count, thinkanywhere_count = remove_think_blocks(completion)
 
-    if type(test_cases) == str:
-        test_cases = json.loads(test_cases)
+    if "</think>" in completion:
+        solution_str = completion.split("</think>")[1]
+    else:
+        # print("No </think> tag found")
+        solution_str = completion
+        # if is_long_penalty:
+        #     return -1, "No '</think>' found"
+        # else:
+        #     return 0, "No '</think>' found"
+
+    thinkanywhere_pattern = r"<thinkanywhere>.*?</thinkanywhere>"
+    solution_str = re.sub(thinkanywhere_pattern, "", solution_str, flags=re.DOTALL)
     
     if "question_id" in test_cases:
-        # print("check: question_id in test_cases")
         try:
             benchmark = pickle.load(open(os.path.join(livecodebench_dir, "{}.pkl".format(test_cases["question_id"])), "rb"))
             custom_output = test_cases.copy()
             custom_output["output_list"] = [solution_str]
-            #todo: 判断这里的score类型
-            raw_score = lcb_compute_score([custom_output], [benchmark])
-            print(f"question_id in test_cases, raw_score = {raw_score}, raw_score类型 = {type(raw_score)}")
-            if isinstance(raw_score, bool):
-                raw_score = 0.9 if raw_score else 0.0
-            else:
-                raw_score = float(raw_score) * 0.9
-            return raw_score+format_reward, None
+            return lcb_compute_score([custom_output], [benchmark]), None
         except:
             traceback.print_exc(10)
             return False, None
     elif 'import_prefix' in test_cases:
-        # print("check: import_prefix in test_cases")
 
         solutions = re.findall(r"```python\n(.*?)```", solution_str, re.DOTALL)
         if len(solutions) == 0:
@@ -292,19 +272,18 @@ def compute_score(completion, test_cases, task=None, timeout=6, is_long_penalty=
                     unit_test_metadata.append("执行异常")
                     
             if is_binary_reward:
-                return (0.9 if all(unit_test_result) else 0.0)+format_reward, unit_test_metadata
+                return all(unit_test_result), unit_test_metadata
             else:
                 if is_power4_reward:
                     return (sum(unit_test_result)/len(unit_test_result))**4, unit_test_metadata
                 else:
-                    return sum(unit_test_result)/len(unit_test_result)*0.9+format_reward, unit_test_metadata
+                    return sum(unit_test_result)/len(unit_test_result), unit_test_metadata
 
         except Exception as e:
             traceback.print_exc(10)
             return False, f"代码解析错误: {str(e)}"
 
     elif "inputs" in test_cases:
-        # print("check: inputs in test_cases")
         try:
             solutions = re.findall(r"```python\n(.*?)```", solution_str, re.DOTALL)
             if len(solutions) == 0 :
@@ -351,18 +330,17 @@ def compute_score(completion, test_cases, task=None, timeout=6, is_long_penalty=
             metrics[0] = fixed
 
             if is_binary_reward:
-                return (0.9 if sum(metrics[0]) == len(metrics[0]) else 0.0)+format_reward, metrics
+                return sum(metrics[0]) == len(metrics[0]), metrics
             else:
                 if is_power4_reward:
                     return (sum((x if x in [False, True] else False) for x in metrics[0])/len(metrics[0]))**4, metrics
                 else:
-                    return sum((x if x in [False, True] else False) for x in metrics[0])/len(metrics[0])*0.9+format_reward, metrics
+                    return sum((x if x in [False, True] else False) for x in metrics[0])/len(metrics[0]), metrics
 
         except Exception as e:
             traceback.print_exc(10)
             return False, None
     elif "assert_case" in test_cases:
-        # print("check: assert_case in test_cases")
 
         solutions = re.findall(r"```python\n(.*?)```", solution_str, re.DOTALL)
         if len(solutions) == 0:
@@ -410,21 +388,20 @@ def compute_score(completion, test_cases, task=None, timeout=6, is_long_penalty=
                     unit_test_metadata.append("执行异常")
                     
             if is_binary_reward:
-                return (0.9 if all(unit_test_result) else 0.0) + format_reward , unit_test_metadata
+                return all(unit_test_result), unit_test_metadata
             else:
                 if is_power4_reward:
                     return (sum(unit_test_result)/len(unit_test_result))**4, unit_test_metadata
                 else:
-                    return sum(unit_test_result)/len(unit_test_result)*0.9 + format_reward, unit_test_metadata
+                    return sum(unit_test_result)/len(unit_test_result), unit_test_metadata
 
         except Exception as e:
             traceback.print_exc(10)
             return False, f"代码解析错误: {str(e)}"
 
     else:
-        # print("check: math_verify")
         try:
-            return math_verify_reward_function(solution_str, test_cases)*0.9 + format_reward, None
+            return math_verify_reward_function(solution_str, test_cases), None
         except:
             traceback.print_exc(10)
             return False, None

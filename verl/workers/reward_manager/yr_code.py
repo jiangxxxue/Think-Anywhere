@@ -39,7 +39,8 @@ def parallel_compute_score(evaluation_func, response_str, ground_truth, data_sou
                 results[index], metadata[index] = future.result()
                 pbar.update(1)
 
-    return [results[i] for i in range(len(response_str))]
+    return [results[i] for i in range(len(response_str))], [metadata[i] for i in range(len(response_str))]
+
 
 
 class YRRewardManager:
@@ -101,13 +102,14 @@ class YRRewardManager:
 
 
         scores = []
+        metadatas = []
         try:
             for i in range(0, len(response_str), 1024):
                 cur_response_str = response_str[i:i+1024]
                 cur_ground_truth = ground_truth[i:i+1024]
                 cur_data_sources = data_sources[i:i+1024]
 
-                cur_scores = parallel_compute_score(
+                cur_scores, cur_metadatas = parallel_compute_score(
                         self.compute_score,
                         cur_response_str,
                         cur_ground_truth,
@@ -115,21 +117,36 @@ class YRRewardManager:
                     )
 
                 scores += cur_scores
+                metadatas += cur_metadatas
             assert len(scores) == len(response_str)
 
         except Exception as e:
             print(f"Unexpected error in batched reward computing. Setting all as 0.: {e}")
             scores = [0. for _ in range(len(response_str))]
+            metadatas = [{} for _ in range(len(response_str))]
+
+        correctness_tensor = torch.zeros_like(data.batch['responses'], dtype=torch.float32)
+        format_reward_tensor = torch.zeros_like(data.batch['responses'], dtype=torch.float32)
 
         for i in range(len(data)):
             data_source = data_sources[i]
             reward_tensor[i, valid_response_length[i].item() - 1] = scores[i]
+            
+            if metadatas and i < len(metadatas) and isinstance(metadatas[i], dict):
+                if "correctness" in metadatas[i]:
+                    correctness_tensor[i, valid_response_length[i].item() - 1] = metadatas[i]["correctness"]
+                if "format_reward" in metadatas[i]:
+                    format_reward_tensor[i, valid_response_length[i].item() - 1] = metadatas[i]["format_reward"]
 
             if data_source not in already_print_data_sources:
+
+
                 already_print_data_sources[data_source] = 0
 
             if already_print_data_sources[data_source] < self.num_examine:
                 already_print_data_sources[data_source] += 1
                 print("[response]", response_str[i])
-
+        
+        data.batch['correctness_rewards'] = correctness_tensor
+        data.batch['format_rewards'] = format_reward_tensor
         return reward_tensor
