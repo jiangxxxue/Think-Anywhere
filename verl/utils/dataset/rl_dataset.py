@@ -78,6 +78,7 @@ class RLHFDataset(Dataset):
                  tokenizer: PreTrainedTokenizer,
                  prompt_key='prompt',
                  max_prompt_length=1024,
+                 max_raw_prompt_length=None,
                  filter_prompts=True,
                  cache_dir='~/.cache/verl/rlhf',
                  chat_template_func=None,
@@ -93,6 +94,7 @@ class RLHFDataset(Dataset):
 
         self.prompt_key = prompt_key
         self.max_prompt_length = max_prompt_length
+        self.max_raw_prompt_length = max_raw_prompt_length if max_raw_prompt_length is not None else max_prompt_length
         self.filter_prompts = filter_prompts
 
         self.return_raw_chat = return_raw_chat
@@ -141,18 +143,15 @@ class RLHFDataset(Dataset):
         tokenizer = self.tokenizer
         prompt_key = self.prompt_key
 
-        def _calc_full_prompt_length(doc):
-            # 1. 拼接 System Prompt
-            full_chat = self._get_full_chat_with_system(doc[prompt_key])
-            # 2. 计算拼接后的 token 长度
+        def _calc_raw_prompt_length(doc):
             return len(tokenizer.apply_chat_template(
-                full_chat, 
+                doc[prompt_key], 
                 add_generation_prompt=True
             ))
 
-        # 过滤逻辑：拼接 System Prompt 后长度 ≤ max_prompt_length
+
         self.dataframe = self.dataframe[
-            self.dataframe.apply(_calc_full_prompt_length, axis=1) <= self.max_prompt_length
+            self.dataframe.apply(_calc_raw_prompt_length, axis=1) <= self.max_raw_prompt_length
         ]
 
         print(f'filter dataset len: {len(self.dataframe)}')

@@ -512,70 +512,99 @@ class FSDPSFTTrainer(object):
             loss = self._compute_loss_and_backward(batch, do_backward=False)
             torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.AVG)
         return loss
-
     def save_checkpoint(self, step):
-        rank = self.device_mesh.get_rank()
-
-        local_root = "/dev/shm/qwen_stage2_save_final"
-        save_path = os.path.join(local_root, f'global_step_{step}')
-
-        # 2. FSDP Gather
         from torch.distributed.fsdp import FullStateDictConfig, StateDictType
-        cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+        from peft import PeftModel
+        import shutil
+        import gc
 
-        if rank == 0: print(f"Rank 0: 正在执行 FSDP state_dict gather...")
+        # 1. 强制同步，清理所有异步计算残留，防止死锁
+        torch.cuda.synchronize()
+        torch.distributed.barrier()
+
+        # 2. FSDP Gather 全量参数到 Rank 0 的 CPU
+        cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
         with FSDP.state_dict_type(self.fsdp_model, StateDictType.FULL_STATE_DICT, cfg):
             state_dict = self.fsdp_model.state_dict()
 
-        # 3. Rank 0 独占逻辑
+        rank = self.device_mesh.get_rank()
+        target_path = os.path.join(self.config.trainer.default_local_dir, f'global_step_{step}')
+
+        # 3. Rank 0 独占保存逻辑
         if rank == 0:
-            print(f"Rank 0: Gather 完成，开始过滤...")
+            print(f"Rank 0: Gather 完成，开始过滤和清洗...")
+            
+            # 使用内存盘作为 I/O 缓冲，极大避免阻塞
+            temp_shm_path = os.path.join("/dev/shm", f"verl_save_temp_{step}")
+            os.makedirs(temp_shm_path, exist_ok=True)
 
-            # --- 过滤逻辑 ---
-            keys_to_save = {}
+            final_state_dict = {}
+            is_peft = isinstance(self.model, PeftModel)
+            
+            # 获取需要在 Stage 1/2 额外保存的模块 (如 embed_tokens, lm_head)
+            modules_to_save = self.config.model.get('modules_to_save', [])
+            if modules_to_save:
+                modules_to_save = convert_to_regular_types(modules_to_save)
+
+            # --- 核心过滤与深拷贝 ---
             for k, v in state_dict.items():
-                if "lora_" in k or "embed_tokens" in k or "lm_head" in k:
-                    # 深拷贝到 CPU，切断显存联系
-                    keys_to_save[k] = v.clone().detach().cpu()
+                # 清洗 FSDP 前缀
+                new_k = k.replace("_fsdp_wrapped_module.", "")
+                
+                if is_peft:
+                    # Stage 2 逻辑：保留 LoRA 和 指定模块
+                    if "lora_" in new_k or any(m in new_k for m in modules_to_save):
+                        final_state_dict[new_k] = v.clone().detach().cpu()
+                elif modules_to_save:
+                    # Stage 1 逻辑：仅保留 指定模块
+                    if any(m in new_k for m in modules_to_save):
+                        final_state_dict[new_k] = v.clone().detach().cpu()
+                else:
+                    # 全参微调逻辑
+                    final_state_dict[new_k] = v.clone().detach().cpu()
 
+            # --- 暴力回收内存 ---
             del state_dict
-            import gc
             gc.collect()
-            print(f"Rank 0: 内存回收完成，准备写入内存盘 {save_path} ...")
+            print(f"Rank 0: 内存回收完成，过滤出 {len(final_state_dict)} 个 Tensor。准备写入...")
 
-            os.makedirs(save_path, exist_ok=True)
-
-            # === 手动保存 ===
-            weight_path = os.path.join(save_path, "adapter_model.bin")
-            torch.save(keys_to_save, weight_path)
-            print(f"Rank 0: ✅ 权重已写入 /dev/shm (adapter_model.bin)")
-
-            # 保存 Config
-            if hasattr(self.model, "peft_config"):
-                adapter_config = self.model.peft_config['default']
-                adapter_config.save_pretrained(save_path)
+            # --- 写入逻辑 ---
+            if is_peft:
+                # Stage 2 手动保存 PEFT 格式
+                weight_path = os.path.join(temp_shm_path, "adapter_model.bin")
+                torch.save(final_state_dict, weight_path)
+                if hasattr(self.model, "peft_config"):
+                    self.model.peft_config['default'].save_pretrained(temp_shm_path)
+                print(f"Rank 0: ✅ Stage 2 权重已写入 /dev/shm")
+            else:
+                # Stage 1 / 全参：调用 HF 标准接口保存 (此时 dict 已经很小，不会 OOM)
+                self.model.save_pretrained(temp_shm_path, state_dict=final_state_dict)
+                print(f"Rank 0: ✅ Stage 1 权重已写入 /dev/shm")
 
             # 保存 Tokenizer
-            self.tokenizer.save_pretrained(save_path)
+            self.tokenizer.save_pretrained(temp_shm_path)
 
-            print(f"Rank 0: 🎉 保存流程结束！")
-
+            # --- 搬运到最终目标硬盘 ---
             try:
-                # 使用 yaml 里配置的路径
-                target_hdfs_dir = os.path.join(self.config.trainer.default_local_dir, f'global_step_{step}')
-                print(f"Rank 0: 正在搬运到 HDFS: {target_hdfs_dir} ...")
-                import shutil
-                if os.path.exists(target_hdfs_dir):
-                    shutil.rmtree(target_hdfs_dir)
-                shutil.copytree(save_path, target_hdfs_dir)
-                print(f"Rank 0: ✅ HDFS 搬运完成")
+                print(f"Rank 0: 正在从内存盘搬运到目标目录: {target_path} ...")
+                if os.path.exists(target_path):
+                    shutil.rmtree(target_path)
+                shutil.copytree(temp_shm_path, target_path)
+                
+                # 可选：如果配置了 HDFS
+                if self.config.trainer.default_hdfs_dir:
+                    hdfs_io.makedirs(self.config.trainer.default_hdfs_dir, exist_ok=True)
+                    hdfs_io.copy(src=target_path, dst=self.config.trainer.default_hdfs_dir, dirs_exist_ok=True)
+                    
+                print(f"Rank 0: 🎉 搬运完成！")
             except Exception as e:
                 print(f"Rank 0: ⚠️ 搬运失败: {e}")
+            finally:
+                if os.path.exists(temp_shm_path):
+                    shutil.rmtree(temp_shm_path)
 
-        # 4. 同步
-        print(f"Rank {rank}: 等待 Barrier...")
+        # 4. 同步等待
         torch.distributed.barrier()
-        print(f"Rank {rank}: Barrier 通过！")
 
     def fit(self):
         rank = self.device_mesh.get_rank()

@@ -506,6 +506,7 @@ class RayPPOTrainer(object):
                                          tokenizer=self.tokenizer,
                                          prompt_key=self.config.data.prompt_key,
                                          max_prompt_length=self.config.data.max_prompt_length,
+                                         max_raw_prompt_length=self.config.data.get('max_raw_prompt_length', None),
                                          filter_prompts=True,
                                          return_raw_chat=self.config.data.get('return_raw_chat', False),
                                          truncation='error')
@@ -533,6 +534,7 @@ class RayPPOTrainer(object):
                                        tokenizer=self.tokenizer,
                                        prompt_key=self.config.data.prompt_key,
                                        max_prompt_length=self.config.data.max_prompt_length,
+                                       max_raw_prompt_length=self.config.data.get('max_raw_prompt_length', None),
                                        filter_prompts=True,
                                        return_raw_chat=self.config.data.get('return_raw_chat', False),
                                        truncation='error')
