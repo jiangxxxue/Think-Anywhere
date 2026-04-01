@@ -1,6 +1,7 @@
 # Think Anywhere in Code Generation
 
 This repository contains the source code for the paper **"Think Anywhere in Code Generation"**.
+> **Note:** This codebase is being progressively open-sourced. Stay tuned for updates.
 
 ## Training Your Own Model
 
