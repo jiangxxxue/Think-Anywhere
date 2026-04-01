@@ -5,11 +5,15 @@ This repository contains the source code for the paper **"Think Anywhere in Code
 
 ## Training Your Own Model
 
-The training pipeline consists of three sequential stages: adding special tokens, supervised fine-tuning (SFT), and reinforcement learning (RL). Follow these steps to train your own model:
+We provide two training pipelines depending on whether you choose to use special tokens. Follow the instructions for your preferred configuration, and then proceed to the Reinforcement Learning phase.
 
-### 1. Add Special Tokens
+### Option 1: With Special Tokens
+
+This pipeline consists of adding special tokens followed by a two-stage supervised fine-tuning (SFT) process.
+
+#### 1. Add Special Tokens
 First, add the required special tokens to the base model using the script below:
-```python
+```bash
 python thinkanywhere_scripts/add_special_token.py
 ```
 
@@ -34,6 +38,22 @@ torchrun --nproc_per_node=8 -m verl.trainer.fsdp_sft_trainer \
   --config-path config \
   --config-name qwen_code_sft_stage2.yaml
 ```
+
+### Option 2: Without Special Tokens
+
+If you choose not to add special tokens, you can skip the token addition and run a single-stage SFT.
+
+#### 1.Supervised Fine-Tuning (SFT)
+
+Run the standard SFT directly using the configuration file `verl/trainer/config/qwen_code_sft.yaml`:
+
+```bash
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+torchrun --nproc_per_node=8 -m verl.trainer.fsdp_sft_trainer \
+  --config-path config \
+  --config-name qwen_code_sft.yaml
+```
+
 ### 3. Reinforcement Learning (RL) Training
 Once SFT is finished, start the RL training phase:
 
