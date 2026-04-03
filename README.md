@@ -6,7 +6,7 @@
 This repository contains the source code for the paper **"Think Anywhere in Code Generation"**.
 > **Note:** This codebase is being progressively open-sourced. Stay tuned for updates.
 
-> **📢 News:**  Ranked as 🔥 Hot Paper on alphaXiv and 🚀 Trending Paper on Hugging Face!
+> **📢 News:**  Ranked as 🔥 Top-2 Hot Paper on alphaXiv and 🚀 Trending Paper on Hugging Face!
 
 ## Training Your Own Model
 
