@@ -8,6 +8,29 @@ This repository contains the source code for the paper **"Think Anywhere in Code
 
 > **📢 News:**  Ranked as 🔥 Top-2 Hot Paper on alphaXiv and 🚀 Trending Paper on Hugging Face!
 
+## Installation
+
+Conda environment:
+
+```bash
+# Installing Python 3.10 Environment.
+conda create -n verl python==3.10
+conda activate verl
+
+# Installing RLLM dependencies.
+pip3 install torch==2.4.0 --index-url https://download.pytorch.org/whl/cu124
+pip3 install flash-attn --no-build-isolation
+cd Think-Anywhere
+pip3 install -e .
+```
+
+Flash Attention Installation (Recommended): If you encounter issues with flash-attn, install from the official release:
+
+```bash
+wget https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.3/flash_attn-2.7.3+cu12torch2.4cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+pip install flash_attn-2.7.3+cu12torch2.4cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+```
+
 ## Training Your Own Model
 
 We provide two training pipelines depending on whether you choose to use special tokens. Follow the instructions for your preferred configuration, and then proceed to the Reinforcement Learning phase.
