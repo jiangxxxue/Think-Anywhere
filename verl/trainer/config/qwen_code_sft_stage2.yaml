@@ -11,7 +11,7 @@ data:
   balance_dp_token: False
   chat_template: null
 model:
-  partial_pretrain: /mnt/hdfs/data/ThinkAnywhere/Qwen2.5-Coder-7B-Instruct-TwoStageLora-stage1/global_step_104
+  partial_pretrain: /mnt/hdfs/data/test/Qwen2.5-Coder-7B-Instruct-TwoStageLora-stage1-merged
   fsdp_config:
     wrap_policy:
       min_num_params: 0
@@ -20,8 +20,8 @@ model:
   external_lib: null
   enable_gradient_checkpointing: True
   trust_remote_code: True
-  lora_rank: 64  # Set to positive value to enable LoRA (e.g., 32)
-  lora_alpha: 128  # LoRA scaling factor
+  lora_rank: 16  # Set to positive value to enable LoRA (e.g., 32)
+  lora_alpha: 32  # LoRA scaling factor
   target_modules: all-linear  # Target modules for LoRA adaptation
   use_liger: False
   modules_to_save: ["embed_tokens", "lm_head"]
@@ -39,8 +39,8 @@ trainer:
   resume_path: null
   project_name: qwen-code-sft
   experiment_name: TwoStageLora-stage2
-  total_epochs: 5
+  total_epochs: 1
   total_training_steps: null
   logger: ['console','wandb']
   seed: 1
-  save_freq: 104
+  save_freq: 52
